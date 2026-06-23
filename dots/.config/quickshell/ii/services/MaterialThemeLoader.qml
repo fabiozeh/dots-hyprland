@@ -74,8 +74,11 @@ Singleton {
     }
 
     function toggleLightDark() {
-        const currentlyDark = Appearance.m3colors.darkmode;
-        Quickshell.execDetached([Directories.wallpaperSwitchScriptPath, "--mode", currentlyDark ? "light" : "dark", "--noswitch"]);
+        // Let the (serialized) switch script decide the direction from the
+        // authoritative current mode. Deciding here from Appearance.m3colors.darkmode
+        // is unreliable because that state only updates after a switch finishes,
+        // so quick repeated toggles would re-issue a stale direction.
+        Quickshell.execDetached([Directories.wallpaperSwitchScriptPath, "--mode", "toggle", "--noswitch"]);
     }
 
     GlobalShortcut {

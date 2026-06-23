@@ -55,8 +55,16 @@ post_process() {
     local screen_height="$2"
     local wallpaper_path="$3"
 
+    # Wait for app theming to finish so it stays inside the execution lock held
+    # by main(). This keeps the Qt pipeline (kde-material-you-colors, which reads
+    # the mode from gsettings) from overlapping with a queued run that may have
+    # set a different mode, which otherwise leaves Qt apps and the shell on
+    # opposite light/dark states.
     handle_kde_material_you_colors &
+    local kde_pid=$!
     "$SCRIPT_DIR/code/material-code-set-color.sh" &
+    local code_pid=$!
+    wait "$kde_pid" "$code_pid"
 }
 
 check_and_prompt_upscale() {
@@ -324,6 +332,15 @@ main() {
     color=""
     noswitch_flag=""
 
+    # Serialize invocations. Color generation (matugen + python) and app theming
+    # (kde-material-you-colors) write shared files and read the global mode, so
+    # overlapping runs race and leave the shell and apps inconsistent. Holding
+    # this lock for the whole run makes rapid clicks (e.g. mashing the dark mode
+    # toggle) apply sequentially instead of fighting each other.
+    mkdir -p "$STATE_DIR/user/generated"
+    exec 9>"$STATE_DIR/user/generated/switchwall.lock"
+    flock 9
+
     get_type_from_config() {
         jq -r '.appearance.palette.type' "$SHELL_CONFIG_FILE" 2>/dev/null || echo "auto"
     }
@@ -381,6 +398,19 @@ main() {
                 ;;
         esac
     done
+
+    # Resolve "toggle" to a concrete mode from the authoritative current state
+    # (the GTK color-scheme, which is also what app theming reads) rather than
+    # the shell's color state, which only catches up after a switch completes.
+    # Done after acquiring the lock so queued toggles see the previous run's result.
+    if [[ "$mode_flag" == "toggle" ]]; then
+        current_mode=$(gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null | tr -d "'")
+        if [[ "$current_mode" == "prefer-dark" ]]; then
+            mode_flag="light"
+        else
+            mode_flag="dark"
+        fi
+    fi
 
     # If accentColor is set in config, use it
     config_color="$(get_accent_color_from_config)"
